@@ -1,0 +1,17 @@
+#!/bin/sh
+# Assign the camera AP lease without installing its gateway as the host default.
+IFACE="${interface:-wlan0}"
+case "$1" in
+  deconfig)
+    ip -4 addr flush dev "$IFACE"
+    ;;
+  bound|renew)
+    IP="${ip:-}"
+    MASK="${subnet:-255.255.255.0}"
+    [ -n "$IP" ] || exit 1
+    PREFIX=$(awk -v mask="$MASK" 'BEGIN { n=split(mask,a,"."); bits=0; for(i=1;i<=n;i++){ x=a[i]; while(x>0){bits+=x%2; x=int(x/2)} } print bits }')
+    ip addr replace "$IP/$PREFIX" dev "$IFACE"
+    # Deliberately ignore the router option: eth0 remains the only default route.
+    ;;
+esac
+exit 0

@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+
+description="Pentax K-70 Wi-Fi photo synchronization"
+supervisor=supervise-daemon
+command="/usr/bin/python3"
+command_args="-m pentax_sync run"
+export PYTHONPATH="/opt/pentax-sync"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/pentax-sync.log"
+error_log="/var/log/pentax-sync.log"
+respawn_delay=5
+respawn_max=0
+respawn_period=60
+
+depend() {
+	need networking iwd
+	after localmount jellyfin docker
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/pentax-sync
+	checkpath -d -m 0755 /var/lib/pentax-sync
+	[ -d /home/daniel/media/fotex/DIRECT ] || { eerror "photo folder is missing"; return 1; }
+	[ -r /etc/pentax-sync.env ] || eerror "/etc/pentax-sync.env is missing"
+	PYTHONPATH=/opt/pentax-sync /usr/bin/python3 -m pentax_sync --validate-config || return 1
+}

@@ -1,0 +1,3 @@
+#!/bin/sh
+export PYTHONPATH=/opt/pentax-sync
+exec /usr/bin/python3 -m pentax_sync "$@"

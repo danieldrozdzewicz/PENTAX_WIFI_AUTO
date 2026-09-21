@@ -1,0 +1,51 @@
+# Python bytecode and tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and credentials
+.venv/
+venv/
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!etc/pentax-sync.env.example
+*.psk
+*.key
+*.pem
+.secrets/
+
+# Runtime state, logs, and incomplete transfers
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+*.part
+*.thumb.jpg
+
+# Camera media (keep personal images and generated previews out of source control)
+*.dng
+*.pef
+*.jpg
+*.jpeg
+*.DNG
+*.PEF
+*.JPG
+*.JPEG
+_jpeg/
+DIRECT/
+
+# Build output and OS metadata
+build/
+dist/
+*.egg-info/
+.DS_Store
+Thumbs.db
+desktop.ini
