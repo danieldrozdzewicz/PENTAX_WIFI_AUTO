@@ -1,94 +1,162 @@
-# Pentax K-70 Wi-Fi photo sync
+# Pentax Wi-Fi Auto
 
-# PROMPT   WIFI PENTAX
+Usługa dla Alpine Linux, która łączy się z punktem dostępowym aparatu Pentax K-70, pobiera zdjęcia i udostępnia je przez Samba oraz Jellyfin. Po jednorazowej konfiguracji usługa uruchamia się razem z serwerem, ponawia połączenie po wybudzeniu i sama wznawia synchronizację, gdy aparat oraz jego Wi-Fi są dostępne.
 
-Small Python daemon for copying new Pentax K-70 files over its own Wi-Fi AP to Alpine Linux. It uses the existing `iwd` service and OpenRC. Camera discovery and the first real transfer still need to be verified against this K-70 firmware before the service can be considered production-ready.
+## Jak to działa
 
-## Current host layout
+1. Usługa OpenRC próbuje połączyć kartę `wlan0` z Wi-Fi aparatu. Interfejs Ethernet `eth0` nadal obsługuje LAN i domyślną trasę.
+2. Usługa sprawdza aparat pod adresem `http://192.168.0.1`. Co 2 sekundy sprawdza najnowsze zdjęcie, a pełną listę karty aparatu odświeża co 60 sekund.
+3. Pobiera zdjęcia JPG/JPEG, DNG i PEF. Stan zapisuje w SQLite, więc po restarcie rozpoznaje pobrane pliki i ponawia nieudane próby.
+4. Zapisuje pobierany plik jako `.part`, sprawdza rozmiar i format, a dopiero po poprawnym pobraniu zmienia jego nazwę na docelową. Przerwana transmisja jest ponawiana od początku; transfer nie jest wznawiany od przerwanego miejsca. Niekompletny plik nie jest pokazywany jako gotowe zdjęcie.
+5. Po pobraniu RAW-a tworzy JPEG-owy podgląd z JPEG-a osadzonego w RAW-ie. Podgląd nie jest pełnym wywołaniem RAW-a i dziedziczy balans bieli oraz wyostrzenie ustawione w aparacie.
+6. Prosi Jellyfin o odświeżenie biblioteki po nowych zdjęciach oraz co 5 minut. Podczas długiego transferu sprawdza, czy pora na odświeżenie, po każdym zakończonym pliku.
 
-- Ethernet remains on `eth0`, `192.168.1.150/24`, with the default gateway on `192.168.1.1`.
-- Camera Wi-Fi uses `wlan0` and must never become the default route.
-- Photo destination is `/home/daniel/media/fotex/DIRECT`, exposed as `\\192.168.1.150\daniel\media\fotex\DIRECT` through Samba's `daniel` home share.
-- Jellyfin runs locally at `http://127.0.0.1:8096`.
-- State database is `/var/lib/pentax-sync/state.db`.
+Usługa nie usuwa plików z karty aparatu.
 
-## Features
+## Gdzie trafiają pliki
 
-- Polls camera status and `/v1/photos/latest/info`; periodically lists `/v1/photos` to recover missed events.
-- Downloads JPG/JPEG, DNG and PEF files sequentially. On first camera listing it records existing card contents as a baseline; set `INITIAL_SYNC=all` to import those files too.
-- Tracks camera path and filename in SQLite and recovers after restarts.
-- Writes to `.part`, fsyncs, checks the received size when the API provides it, hashes SHA-256, then atomically renames.
-- Retries missed files on later listings; does not delete anything from the camera.
-- Optional inclusive `PHOTO_DATE_FROM` date/time filter; the K-70 per-photo metadata endpoint supplies capture dates when the list omits them.
-- Extracts the DNG/PEF embedded JPEG with `simple_dcraw` when installed, so Jellyfin can display a normal JPEG photo alongside each RAW. The RAW remains untouched.
-- IWD profile uses mode 0600. DHCP config ignores the router option, so it does not install a default route over Wi-Fi.
-- Waits for the camera AP to become available and retries after the camera disconnects or Alpine resumes.
-- Can request a debounced Jellyfin library refresh with an API key.
+Katalog synchronizacji na serwerze:
 
-## Install on Alpine
+```text
+/home/daniel/media/fotex/DIRECT/
+├── _IMG0001.DNG
+├── _IMG0002.PEF
+└── _jpeg/
+    ├── _IMG0001.jpg
+    └── _IMG0002.jpg
+```
 
-Required components on this host are already present: Python 3, SQLite's Python module, `iwd`, BusyBox `udhcpc`, and OpenRC. The code uses only Python standard library modules.
+RAW-y pozostają w `DIRECT`, a JPEG-i z aparatu i podglądy wygenerowane z RAW-ów trafiają do `DIRECT/_jpeg`. Pliki widać w udziale Samba pod adresem:
 
-For Jellyfin previews of DNG/PEF, install Alpine's `libraw-tools` package; the daemon uses its `simple_dcraw` executable to extract each RAW's embedded JPEG, then uses `ffmpeg` to resize and recompress it. All camera JPEGs and generated previews are stored in a `_jpeg` subfolder under `PHOTO_ROOT`; RAW files remain directly under `PHOTO_ROOT`. Jellyfin's current Skia image encoder cannot decode this camera's DNG directly, even though it recognizes the DNG extension.
+```text
+\\192.168.1.150\daniel\media\fotex\DIRECT
+```
 
-Preview settings are in `/etc/pentax-sync.env` on the Alpine host, not in Jellyfin's UI. `RAW_PREVIEW_MAX_SIDE` caps either image dimension in pixels (default 1920); `RAW_PREVIEW_QUALITY` is 1–100 (default 70, lower means stronger JPEG compression). Restart `pentax-sync` after changing either value. Existing previews must be regenerated to apply changed settings.
+W Jellyfin biblioteka `DIRECT` powinna wskazywać na `/home/daniel/media/fotex/DIRECT`. Odświeżanie skanuje zawartość tej biblioteki, w tym folder `_jpeg`.
 
-Copy the `pentax_sync` directory to `/opt/pentax-sync/pentax_sync`, copy `udhcpc-script` to `/opt/pentax-sync/udhcpc-script`, and copy `etc/init.d/pentax-sync` to `/etc/init.d/pentax-sync`. Then:
+## Ustawienia serwera
 
-    chmod 0755 /opt/pentax-sync/udhcpc-script /etc/init.d/pentax-sync
-    cp etc/pentax-sync.env.example /etc/pentax-sync.env
-    chmod 0600 /etc/pentax-sync.env
-    rc-update add pentax-sync default
+Aktywna konfiguracja znajduje się na serwerze w `/etc/pentax-sync.env` i zawiera hasło Wi-Fi oraz klucz API Jellyfin. Nie umieszczaj tych danych w repozytorium. Plik przykładowy `etc/pentax-sync.env.example` nie zawiera sekretów.
 
-Set the camera SSID and Wi-Fi passphrase in `/etc/pentax-sync.env`. Do not put secrets in source files. Confirm `CAMERA_BASE_URL` with the camera before relying on the default `192.168.0.1`.
+Najważniejsze opcje:
 
-Set Jellyfin's API key in that same root-only config file. The daemon requests a library refresh after a quiet period following new downloads and at `JELLYFIN_REFRESH_INTERVAL` (default 300 seconds). During long camera transfers it checks after each file, so the library can refresh while the rest of the card is still downloading. Without a key, downloads still work and the daemon logs that refresh was skipped.
+| Zmienna | Znaczenie | Przykład |
+| --- | --- | --- |
+| `CAMERA_SSID` | Nazwa sieci Wi-Fi aparatu | `PENTAX_9A9B62` |
+| `CAMERA_WIFI_PASSWORD` | Hasło Wi-Fi aparatu | ustaw lokalnie na serwerze |
+| `CAMERA_BASE_URL` | Adres API aparatu | `http://192.168.0.1` |
+| `PHOTO_ROOT` | Katalog docelowy RAW-ów i folderu `_jpeg` | `/home/daniel/media/fotex/DIRECT` |
+| `PHOTO_DATE_FROM` | Włącznie akceptowana data wykonania zdjęcia; pusta wartość wyłącza filtr | `2026-07-20` |
+| `INITIAL_SYNC` | Zachowanie przy pierwszej inwentaryzacji karty: `baseline` pomija zastane pliki, `all` importuje je | `baseline` |
+| `RAW_PREVIEW_MAX_SIDE` | Maksymalny rozmiar dłuższego boku podglądu w pikselach | `3840` |
+| `RAW_PREVIEW_QUALITY` | Jakość JPEG 1–100; niższa wartość oznacza mocniejszą kompresję | `70` |
+| `JELLYFIN_URL` | Adres Jellyfin widziany przez serwer | `http://127.0.0.1:8096` |
+| `JELLYFIN_API_KEY` | Klucz API używany do odświeżania biblioteki | ustaw lokalnie na serwerze |
+| `JELLYFIN_REFRESH_DEBOUNCE` | Cisza po pobieraniu przed odświeżeniem | `10` sekund |
+| `JELLYFIN_REFRESH_INTERVAL` | Okres między odświeżeniami biblioteki | `300` sekund |
+| `POLL_INTERVAL` | Odstęp pomiędzy kontrolami usługi | `2` sekundy |
+| `FULL_SCAN_INTERVAL` | Okres pełnej listy zdjęć z aparatu | `60` sekund |
 
-Set `PHOTO_DATE_FROM=YYYY-MM-DD` to accept photos captured on or after that date. You can include a time, for example `PHOTO_DATE_FROM=2026-09-20T14:30:00`; camera-local time is compared with the server's local time. The date is inclusive. Leave it empty to disable date filtering. When the configured value changes, previously filtered entries are reconsidered. With `INITIAL_SYNC=baseline`, the first inventory is still just a baseline and existing card contents are not imported.
+Data `PHOTO_DATE_FROM` jest włącznie. Usługa pobiera datę wykonania ze szczegółów zdjęcia, jeśli lista aparatu jej nie zawiera. Po zmianie filtra wcześniej pominięte zdjęcia są sprawdzane ponownie.
 
-Start and inspect:
+Parametry `RAW_PREVIEW_MAX_SIDE` i `RAW_PREVIEW_QUALITY` dotyczą tylko dodatkowych JPEG-ów. Nie zmieniają RAW-ów ani JPEG-ów oryginalnych z aparatu. Zmiana ustawień nie przerabia automatycznie istniejących podglądów.
 
-    rc-service pentax-sync start
-    rc-service pentax-sync status
-    /usr/bin/python3 -m pentax_sync --status
-    tail -f /var/log/pentax-sync.log
+## Instalacja na Alpine Linux
 
-## Networking safety
+Usługa wymaga Python 3, iwd, OpenRC oraz BusyBox `udhcpc`. Do generowania podglądów RAW potrzebne są `libraw-tools` i `ffmpeg`:
 
-The camera is an access point for `wlan0`; Ethernet keeps the LAN and default route. The DHCP helper assigns only the camera interface address and deliberately does not install a router or DNS setting. It falls back to `CAMERA_STATIC_ADDRESS` only if the camera did not give the interface an IPv4 address. Check `ip route` before and after first connection. If the camera uses a different subnet, change the static fallback only after confirming its address.
+```sh
+apk add git python3 iwd libraw-tools ffmpeg
+```
 
-## Jellyfin photos and RAW files
+Sklonuj repozytorium do katalogu aplikacji:
 
-Jellyfin 10.11.11 lists DNG and PEF among its supported photo input extensions. Actual thumbnail decoding can still depend on the installed image encoder, so confirm with one real file. The `jellyfin` OS account already has read and traverse permission on the destination folder. The existing library named `Zdjęcia` currently points to `/home/daniel/media/fotex/Do Oglądania`; it does not yet include `DIRECT`. Add `/home/daniel/media/fotex/DIRECT` as another folder path in that library, or add a separate Photos library for it. This requires an admin session in Jellyfin. Then set `JELLYFIN_API_KEY` so the daemon can request debounced refreshes.
+```sh
+git clone https://github.com/danieldrozdzewicz/PENTAX_WIFI_AUTO.git /opt/pentax-sync
+```
 
-## Camera protocol discovery
+Utwórz konfigurację i zainstaluj usługę OpenRC:
 
-After joining the K-70 AP, probe these read-only endpoints first:
+```sh
+cp /opt/pentax-sync/etc/pentax-sync.env.example /etc/pentax-sync.env
+chmod 0600 /etc/pentax-sync.env
+vi /etc/pentax-sync.env
+cp /opt/pentax-sync/etc/init.d/pentax-sync /etc/init.d/pentax-sync
+chmod 0755 /etc/init.d/pentax-sync /opt/pentax-sync/bin/pentax-sync
+chmod 0755 /opt/pentax-sync/udhcpc-script
+```
 
-    curl -v http://192.168.0.1/v1/status
-    curl -v http://192.168.0.1/v1/apis
-    curl -v http://192.168.0.1/v1/photos/latest/info
-    curl -v http://192.168.0.1/v1/photos
+W `/etc/pentax-sync.env` ustaw nazwę sieci i hasło aparatu. Wklej tam również klucz API Jellyfin i sprawdź ścieżkę `PHOTO_ROOT`. Następnie włącz usługę przy starcie systemu:
 
-The K-70 has been verified live: its AP and `/v1` API respond, `/v1/photos` lists files under `dirs[].name` and `dirs[].files`, and a DNG download returns TIFF data. The daemon downloads via `/v1/photos/<camera-path>`. Do not issue camera-control or delete requests.
+```sh
+PYTHONPATH=/opt/pentax-sync python3 -m pentax_sync --validate-config
+rc-update add pentax-sync default
+rc-service pentax-sync start
+```
 
-## Status and recovery
+Usługa zapisuje profil iwd z uprawnieniami tylko dla roota. Pomocnik DHCP nie instaluje bramy domyślnej z Wi-Fi aparatu; połączenie LAN pozostaje na `eth0`.
 
-`--status` reads the runtime status file and SQLite counts. The daemon lists the camera card on first availability, when the latest photo changes, and periodically thereafter. This recovers files made while the camera or server was unavailable. It retries incomplete files on later scans; `.part` is never exposed as a complete image.
+## Aktualizacja
 
-For troubleshooting, check:
+Zachowaj `/etc/pentax-sync.env`, bazę `/var/lib/pentax-sync/state.db` i pobrane zdjęcia. Zaktualizuj kod bez zastępowania konfiguracji:
 
-- `iwctl station wlan0 show` and `rfkill list` for Wi-Fi state.
-- `ip route` to confirm the default route still points at `eth0`.
-- `curl http://192.168.0.1/v1/status` to distinguish Wi-Fi association from API availability.
-- `ls -l /home/daniel/media/fotex/DIRECT` and `/var/log/pentax-sync.log` for file and transfer state.
-- Jellyfin's photo library root and its logs if files exist but thumbnails are missing.
-- A 401 from Jellyfin means the API key is absent or invalid; update `JELLYFIN_API_KEY` and restart the service.
+```sh
+rc-service pentax-sync stop
+cd /opt/pentax-sync
+git pull --ff-only
+rc-service pentax-sync start
+```
 
-## Upgrade and uninstall
+Po zmianie `PHOTO_DATE_FROM`, ustawień podglądu lub interwału odświeżania uruchom usługę ponownie. Zmiana jakości i rozmiaru dotyczy podglądów tworzonych od tego momentu; dotychczasowe pliki w `_jpeg` trzeba przerobić osobno, jeśli mają używać nowych ustawień.
 
-Stop the service before replacing code, preserve `/etc/pentax-sync.env` and `/var/lib/pentax-sync/state.db`, then copy the new package and restart. To uninstall, stop and remove the OpenRC service and code directory. Keep the state database and downloaded images unless you intentionally want to remove them. Removing an IWD profile requires a separate explicit choice because it contains the camera Wi-Fi credential.
+## Codzienne użycie i kontrola
 
-## Known unverified items
+Po uruchomieniu serwera i włączeniu Wi-Fi aparatu nie trzeba ręcznie startować synchronizacji. Usługa działa w OpenRC, czeka na sieć aparatu, automatycznie ponawia połączenie i wyszukuje zdjęcia wykonane podczas jej niedostępności.
 
-The AP and photo-list/download endpoints have been checked against the user's K-70. Initial unattended operation still needs one newly captured photo to verify the full path through Samba and Jellyfin. The daemon polls `latest/info` and rescans the card periodically, so it can recover files made while disconnected.
+Przydatne polecenia:
+
+```sh
+rc-service pentax-sync status
+PYTHONPATH=/opt/pentax-sync python3 -m pentax_sync --status
+tail -f /var/log/pentax-sync.log
+iwctl station wlan0 show
+ip route
+ls -la /home/daniel/media/fotex/DIRECT
+ls -la /home/daniel/media/fotex/DIRECT/_jpeg
+```
+
+Status pokazuje połączenie z aparatem, liczbę pobranych plików, kolejkę błędów oraz stan Jellyfin. Pliki `.part` wskazują na niedokończoną próbę; zostaną nadpisane przy kolejnym pobieraniu.
+
+## Rozwiązywanie problemów
+
+**Usługa nie łączy się z aparatem**
+
+- Sprawdź, czy na aparacie jest włączone Wi-Fi i aktywny punkt dostępowy.
+- Na serwerze sprawdź `iwctl station wlan0 show` i upewnij się, że karta widzi lub łączy się z siecią aparatu.
+- Sprawdź `CAMERA_SSID`, hasło oraz adres `CAMERA_BASE_URL` w `/etc/pentax-sync.env`.
+- Sprawdź `ip route`: trasa domyślna powinna nadal prowadzić przez LAN, a nie `wlan0`.
+
+**Zdjęcia są na dysku, ale nie widać ich w Jellyfin**
+
+- Sprawdź, czy biblioteka Jellyfin `DIRECT` wskazuje na `/home/daniel/media/fotex/DIRECT`.
+- Sprawdź, czy `JELLYFIN_API_KEY` jest ustawiony i poprawny oraz czy Jellyfin działa pod `JELLYFIN_URL`.
+- Sprawdź log `/var/log/pentax-sync.log` pod kątem komunikatów `Jellyfin refresh`.
+- JPEG-i są w `DIRECT/_jpeg`; sprawdź również ten folder w Jellyfin.
+
+**Brakuje podglądów RAW**
+
+- Upewnij się, że zainstalowano `libraw-tools` i `ffmpeg` (`command -v simple_dcraw ffmpeg`).
+- Sprawdź, czy obok RAW-a powstał podgląd o tej samej nazwie w `DIRECT/_jpeg`.
+- Podgląd jest wyciągany z JPEG-a osadzonego w RAW-ie. W tym trybie nie można niezależnie ustawić auto-balansu bieli ani wywołać RAW-a z pełną rozdzielczością matrycy.
+
+## Pliki i katalogi systemowe
+
+| Ścieżka | Zawartość |
+| --- | --- |
+| `/opt/pentax-sync` | Kod aplikacji |
+| `/etc/pentax-sync.env` | Sekrety i konfiguracja; uprawnienia `0600` |
+| `/etc/init.d/pentax-sync` | Usługa OpenRC |
+| `/var/lib/pentax-sync/state.db` | Stan i historia synchronizacji |
+| `/run/pentax-sync/status.json` | Bieżący status usługi |
+| `/var/log/pentax-sync.log` | Log synchronizacji |
+| `/home/daniel/media/fotex/DIRECT` | RAW-y i folder `_jpeg` |
