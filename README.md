@@ -2,6 +2,8 @@
 
 Usługa dla Alpine Linux, która łączy się z punktem dostępowym aparatu Pentax K-70, pobiera zdjęcia i udostępnia je przez Samba oraz Jellyfin. Po jednorazowej konfiguracji usługa uruchamia się razem z serwerem, ponawia połączenie po wybudzeniu i sama wznawia synchronizację, gdy aparat oraz jego Wi-Fi są dostępne.
 
+Ścieżki, interfejs Wi-Fi, adres aparatu, filtrowanie dat, folder JPEG, timeouty i harmonogramy są ustawiane w `/etc/pentax-sync.env`. Część aparatu korzysta z Pentaxowego API `/v1`, więc inne urządzenie musi udostępniać zgodne endpointy i format odpowiedzi.
+
 ## Jak to działa
 
 1. Usługa OpenRC próbuje połączyć kartę `wlan0` z Wi-Fi aparatu. Interfejs Ethernet `eth0` nadal obsługuje LAN i domyślną trasę.
@@ -45,7 +47,11 @@ Najważniejsze opcje:
 | `CAMERA_SSID` | Nazwa sieci Wi-Fi aparatu | `PENTAX_9A9B62` |
 | `CAMERA_WIFI_PASSWORD` | Hasło Wi-Fi aparatu | ustaw lokalnie na serwerze |
 | `CAMERA_BASE_URL` | Adres API aparatu | `http://192.168.0.1` |
-| `PHOTO_ROOT` | Katalog docelowy RAW-ów i folderu `_jpeg` | `/home/daniel/media/fotex/DIRECT` |
+| `WIFI_INTERFACE` | Karta Wi-Fi używana do połączenia z aparatem | `wlan0` |
+| `CAMERA_STATIC_ADDRESS` | Adres interfejsu Wi-Fi, gdy aparat nie przydzieli go przez DHCP | `192.168.0.2/24` |
+| `UDHCPC_SCRIPT_PATH` | Ścieżka do pomocnika DHCP interfejsu aparatu | `/opt/pentax-sync/udhcpc-script` |
+| `PHOTO_ROOT` | Katalog docelowy RAW-ów i folderu `_jpeg` | `/srv/pentax-sync/photos` |
+| `JPEG_SUBDIR` | Nazwa podfolderu na oryginalne JPEG-i i podglądy RAW; pusta wartość zapisuje je obok RAW-ów | `_jpeg` |
 | `PHOTO_DATE_FROM` | Włącznie akceptowana data wykonania zdjęcia; pusta wartość wyłącza filtr | `2026-07-20` |
 | `INITIAL_SYNC` | Zachowanie przy pierwszej inwentaryzacji karty: `baseline` pomija zastane pliki, `all` importuje je | `baseline` |
 | `RAW_PREVIEW_MAX_SIDE` | Maksymalny rozmiar dłuższego boku podglądu w pikselach | `3840` |
@@ -56,6 +62,9 @@ Najważniejsze opcje:
 | `JELLYFIN_REFRESH_INTERVAL` | Okres między odświeżeniami biblioteki | `300` sekund |
 | `POLL_INTERVAL` | Odstęp pomiędzy kontrolami usługi | `2` sekundy |
 | `FULL_SCAN_INTERVAL` | Okres pełnej listy zdjęć z aparatu | `60` sekund |
+| `CONNECT_RETRY_INTERVAL` | Maksymalny odstęp pomiędzy kolejnymi próbami połączenia | `12` sekund |
+| `CAMERA_REQUEST_TIMEOUT` | Limit czasu zapytań API aparatu | `5` sekund |
+| `CAMERA_DOWNLOAD_TIMEOUT` | Limit czasu pojedynczego transferu zdjęcia | `180` sekund |
 
 Data `PHOTO_DATE_FROM` jest włącznie. Usługa pobiera datę wykonania ze szczegółów zdjęcia, jeśli lista aparatu jej nie zawiera. Po zmianie filtra wcześniej pominięte zdjęcia są sprawdzane ponownie.
 
@@ -86,7 +95,7 @@ chmod 0755 /etc/init.d/pentax-sync /opt/pentax-sync/bin/pentax-sync
 chmod 0755 /opt/pentax-sync/udhcpc-script
 ```
 
-W `/etc/pentax-sync.env` ustaw nazwę sieci i hasło aparatu. Wklej tam również klucz API Jellyfin i sprawdź ścieżkę `PHOTO_ROOT`. Następnie włącz usługę przy starcie systemu:
+W `/etc/pentax-sync.env` ustaw nazwę sieci i hasło aparatu. Wklej tam również klucz API Jellyfin i dostosuj `PHOTO_ROOT`, `WIFI_INTERFACE`, `CAMERA_BASE_URL` oraz `CAMERA_STATIC_ADDRESS` do swojej sieci. Katalog `PHOTO_ROOT` jest tworzony automatycznie; udostępnij go przez Sambę i dodaj do biblioteki Jellyfin. Następnie włącz usługę przy starcie systemu:
 
 ```sh
 PYTHONPATH=/opt/pentax-sync python3 -m pentax_sync --validate-config

@@ -65,7 +65,7 @@ class WifiController:
         if Path(udhcpc).exists():
             subprocess.run(
                 [udhcpc, "-q", "-n", "-T", "2", "-t", "2", "-i", self.config.wifi_interface,
-                 "-s", "/opt/pentax-sync/udhcpc-script"],
+                 "-s", self.config.udhcpc_script],
                 capture_output=True, text=True, timeout=12, check=False,
             )
         if not self._has_ipv4():

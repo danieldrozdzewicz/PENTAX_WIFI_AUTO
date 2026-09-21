@@ -36,15 +36,19 @@ class Config:
     jellyfin_api_key: str
     jellyfin_refresh_debounce: float
     jellyfin_refresh_interval: float
+    camera_request_timeout: float
+    camera_download_timeout: float
     poll_interval: float
     full_scan_interval: float
     connect_retry_interval: float
     initial_sync: str
     photo_date_from: datetime | None
+    jpeg_subdir: str
     raw_preview_max_side: int
     raw_preview_quality: int
     connect_command: str
     udhcpc_command: str
+    udhcpc_script: str
     static_wifi_address: str
     log_level: str
 
@@ -69,22 +73,26 @@ class Config:
             camera_wifi_password=val("CAMERA_WIFI_PASSWORD"),
             camera_base_url=val("CAMERA_BASE_URL", "http://192.168.0.1").rstrip("/"),
             wifi_interface=val("WIFI_INTERFACE", "wlan0"),
-            photo_root=Path(val("PHOTO_ROOT", "/home/daniel/media/fotex/DIRECT")),
+            photo_root=Path(val("PHOTO_ROOT", "/srv/pentax-sync/photos")),
             state_dir=Path(val("STATE_DIR", "/var/lib/pentax-sync")),
             status_file=Path(val("STATUS_FILE", "/run/pentax-sync/status.json")),
             jellyfin_url=val("JELLYFIN_URL", "http://127.0.0.1:8096").rstrip("/"),
             jellyfin_api_key=val("JELLYFIN_API_KEY"),
             jellyfin_refresh_debounce=max(1.0, float(val("JELLYFIN_REFRESH_DEBOUNCE", "10"))),
             jellyfin_refresh_interval=max(60.0, float(val("JELLYFIN_REFRESH_INTERVAL", "300"))),
+            camera_request_timeout=max(1.0, float(val("CAMERA_REQUEST_TIMEOUT", "5"))),
+            camera_download_timeout=max(1.0, float(val("CAMERA_DOWNLOAD_TIMEOUT", "180"))),
             poll_interval=max(1.0, float(val("POLL_INTERVAL", "2"))),
             full_scan_interval=max(10.0, float(val("FULL_SCAN_INTERVAL", "60"))),
             connect_retry_interval=max(3.0, float(val("CONNECT_RETRY_INTERVAL", "12"))),
             initial_sync=val("INITIAL_SYNC", "baseline").lower(),
             photo_date_from=parsed_date_from,
+            jpeg_subdir=val("JPEG_SUBDIR", "_jpeg").strip(),
             raw_preview_max_side=int(val("RAW_PREVIEW_MAX_SIDE", "1920")),
             raw_preview_quality=int(val("RAW_PREVIEW_QUALITY", "85")),
             connect_command=val("IWCTL_COMMAND", "/usr/bin/iwctl"),
             udhcpc_command=val("UDHCPC_COMMAND", "/sbin/udhcpc"),
+            udhcpc_script=val("UDHCPC_SCRIPT_PATH", "/opt/pentax-sync/udhcpc-script"),
             static_wifi_address=val("CAMERA_STATIC_ADDRESS", "192.168.0.2/24"),
             log_level=val("LOG_LEVEL", "INFO").upper(),
         )
@@ -99,8 +107,16 @@ class Config:
                 raise ValueError("CAMERA_WIFI_PASSWORD contains a forbidden line break")
         if not self.camera_base_url.startswith("http://"):
             raise ValueError("CAMERA_BASE_URL must use http:// for the camera's local API")
+        if not self.photo_root.is_absolute():
+            raise ValueError("PHOTO_ROOT must be an absolute path")
         if self.initial_sync not in {"baseline", "all"}:
             raise ValueError("INITIAL_SYNC must be baseline or all")
+        if self.jpeg_subdir and (
+            self.jpeg_subdir in {".", ".."}
+            or "/" in self.jpeg_subdir
+            or "\\" in self.jpeg_subdir
+        ):
+            raise ValueError("JPEG_SUBDIR must be one directory name or empty")
         if not 320 <= self.raw_preview_max_side <= 12000:
             raise ValueError("RAW_PREVIEW_MAX_SIDE must be between 320 and 12000 pixels")
         if not 1 <= self.raw_preview_quality <= 100:

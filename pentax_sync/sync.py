@@ -27,8 +27,13 @@ def _iso_now() -> str:
 class SyncDaemon:
     def __init__(self, config: Config):
         self.config = config
+        self.config.photo_root.mkdir(parents=True, exist_ok=True)
         self.wifi = WifiController(config)
-        self.camera = PentaxCamera(config.camera_base_url)
+        self.camera = PentaxCamera(
+            config.camera_base_url,
+            timeout=config.camera_request_timeout,
+            download_timeout=config.camera_download_timeout,
+        )
         self.jellyfin = JellyfinClient(config.jellyfin_url, config.jellyfin_api_key)
         self.state = StateStore(config.state_dir / "state.db")
         configured_date = config.photo_date_from.isoformat() if config.photo_date_from else ""
@@ -115,7 +120,11 @@ class SyncDaemon:
                         continue
                 self.state.mark(photo, "DOWNLOADING")
                 is_jpeg = Path(photo.filename).suffix.lower() in {".jpg", ".jpeg"}
-                download_root = self.config.photo_root / "_jpeg" if is_jpeg else self.config.photo_root
+                jpeg_root = (
+                    self.config.photo_root / self.config.jpeg_subdir
+                    if self.config.jpeg_subdir else self.config.photo_root
+                )
+                download_root = jpeg_root if is_jpeg else self.config.photo_root
                 destination, size, digest = download_atomic(self.camera, photo, download_root)
                 self.state.mark(photo, "DOWNLOADED", local_path=str(destination), size=size, sha256=digest)
                 LOG.info("downloaded %s (%d bytes, %.1f s)", photo.filename, size, time.monotonic() - started)
@@ -125,7 +134,7 @@ class SyncDaemon:
                         destination,
                         max_side=self.config.raw_preview_max_side,
                         quality=self.config.raw_preview_quality,
-                        destination_dir=self.config.photo_root / "_jpeg",
+                        destination_dir=jpeg_root,
                     )
                     if preview:
                         LOG.info("created Jellyfin JPEG preview %s", preview.name)
@@ -162,6 +171,10 @@ class SyncDaemon:
         self.last_refresh = time.monotonic()
         self.last_new_photo = None
 
+    def _retry_delay(self, failures: int) -> float:
+        delay = BACKOFF[min(failures, len(BACKOFF) - 1)]
+        return min(delay, self.config.connect_retry_interval)
+
     def run(self) -> None:
         if self.config.camera_ssid:
             LOG.info("Pentax sync daemon started; target %s", self.config.photo_root)
@@ -186,13 +199,13 @@ class SyncDaemon:
                             self.connect_failures = 0
                             self.next_connect = time.monotonic() + 3
                         else:
-                            delay = BACKOFF[min(self.connect_failures, len(BACKOFF) - 1)]
+                            delay = self._retry_delay(self.connect_failures)
                             self.connect_failures += 1
                             jittered = delay + random.random()
                             self.next_connect = time.monotonic() + jittered
                             LOG.debug("camera Wi-Fi unavailable; retry in %.0f s", jittered)
                     except Exception as exc:
-                        delay = BACKOFF[min(self.connect_failures, len(BACKOFF) - 1)]
+                        delay = self._retry_delay(self.connect_failures)
                         self.connect_failures += 1
                         self.next_connect = time.monotonic() + delay + random.random()
                         LOG.warning("Wi-Fi connect attempt failed: %s", exc)
@@ -227,7 +240,7 @@ class SyncDaemon:
                         if self.status.get("camera_online"):
                             LOG.warning("camera API disconnected: %s", exc)
                         self.status.update(state="WAIT_WIFI", camera_online=False)
-                        delay = BACKOFF[min(self.probe_failures, len(BACKOFF) - 1)]
+                        delay = self._retry_delay(self.probe_failures)
                         self.probe_failures += 1
                         self.next_probe = time.monotonic() + delay
                         self.last_full_scan = 0.0
