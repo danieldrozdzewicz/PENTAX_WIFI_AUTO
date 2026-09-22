@@ -1,4 +1,5 @@
 # Pentax Wi-Fi Auto
+# Prompt WIFI PENTAX
 
 Usługa dla Alpine Linux, która łączy się z punktem dostępowym aparatu Pentax K-70, pobiera zdjęcia i udostępnia je przez Samba oraz Jellyfin. Po jednorazowej konfiguracji usługa uruchamia się razem z serwerem, ponawia połączenie po wybudzeniu i sama wznawia synchronizację, gdy aparat oraz jego Wi-Fi są dostępne.
 
@@ -79,6 +80,7 @@ apk add git python3 iwd libraw-tools ffmpeg
 ```
 
 Sklonuj repozytorium do katalogu aplikacji:
+
 
 ```sh
 git clone https://github.com/danieldrozdzewicz/PENTAX_WIFI_AUTO.git /opt/pentax-sync
