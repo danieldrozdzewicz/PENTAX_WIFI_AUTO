@@ -159,10 +159,13 @@ class SyncDaemon:
         return downloaded
 
     def _refresh_if_due(self) -> None:
+        # Do not periodically wake Jellyfin (and the storage) when the camera
+        # has no new files. The interval is only for long active transfers.
+        if self.last_new_photo is None:
+            return
         now = time.monotonic()
         new_photos_ready = (
-            self.last_new_photo is not None
-            and now - self.last_new_photo >= self.config.jellyfin_refresh_debounce
+            now - self.last_new_photo >= self.config.jellyfin_refresh_debounce
         )
         periodic_refresh_due = now - self.last_refresh >= self.config.jellyfin_refresh_interval
         if not new_photos_ready and not periodic_refresh_due:

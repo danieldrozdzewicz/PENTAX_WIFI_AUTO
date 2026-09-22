@@ -35,7 +35,7 @@ RAW-y pozostają w `DIRECT`, a JPEG-i z aparatu i podglądy wygenerowane z RAW-�
 \\192.168.1.150\daniel\media\fotex\DIRECT
 ```
 
-W Jellyfin biblioteka `DIRECT` powinna wskazywać na `/home/daniel/media/fotex/DIRECT`. Odświeżanie skanuje zawartość tej biblioteki, w tym folder `_jpeg`.
+W Jellyfin biblioteka `DIRECT` powinna wskazywać na `/home/daniel/media/fotex/DIRECT/_jpeg`. Dzięki temu Jellyfin pokazuje gotowe JPEG-i i podglądy, ale nie próbuje dekodować problematycznych plików DNG. Pełne RAW-y pozostają dostępne przez udział Samba w katalogu nadrzędnym `DIRECT`.
 
 ## Ustawienia serwera
 
