@@ -9,8 +9,8 @@ Usługa dla Alpine Linux, która łączy się z punktem dostępowym aparatu Pent
 
 1. Usługa OpenRC próbuje połączyć kartę `wlan0` z Wi-Fi aparatu. Interfejs Ethernet `eth0` nadal obsługuje LAN i domyślną trasę.
 2. Usługa sprawdza aparat pod adresem `http://192.168.0.1`. Co 2 sekundy sprawdza najnowsze zdjęcie, a pełną listę karty aparatu odświeża co 60 sekund.
-3. Pobiera zdjęcia JPG/JPEG, DNG i PEF. Stan zapisuje w SQLite, więc po restarcie rozpoznaje pobrane pliki i ponawia nieudane próby.
-4. Zapisuje pobierany plik jako `.part`, sprawdza rozmiar i format, a dopiero po poprawnym pobraniu zmienia jego nazwę na docelową. Przerwana transmisja jest ponawiana od początku; transfer nie jest wznawiany od przerwanego miejsca. Niekompletny plik nie jest pokazywany jako gotowe zdjęcie.
+3. Pobiera zdjęcia JPG/JPEG, DNG i PEF z limitem równoległości ustawianym przez `DOWNLOAD_CONCURRENCY`. Domyślnie pobiera do dwóch zdjęć jednocześnie; podgląd i zapis stanu są obsługiwane dla każdego zdjęcia po zakończeniu jego transferu. Stan zapisuje w SQLite, więc po restarcie rozpoznaje pobrane pliki i ponawia nieudane próby.
+4. Zapisuje pobierany plik jako `.part`, sprawdza rozmiar i format, a dopiero po poprawnym pobraniu zmienia jego nazwę na docelową. Jeśli poprzednia próba zostawiła już identyczny plik, używa go ponownie zamiast tworzyć kopię z sufiksem `_2`. Przerwana transmisja jest ponawiana od początku; transfer nie jest wznawiany od przerwanego miejsca. Niekompletny plik nie jest pokazywany jako gotowe zdjęcie.
 5. Po pobraniu RAW-a tworzy JPEG-owy podgląd z JPEG-a osadzonego w RAW-ie. Podgląd nie jest pełnym wywołaniem RAW-a i dziedziczy balans bieli oraz wyostrzenie ustawione w aparacie.
 6. Prosi Jellyfin o odświeżenie biblioteki po nowych zdjęciach oraz co 5 minut. Podczas długiego transferu sprawdza, czy pora na odświeżenie, po każdym zakończonym pliku.
 
@@ -66,6 +66,9 @@ Najważniejsze opcje:
 | `CONNECT_RETRY_INTERVAL` | Maksymalny odstęp pomiędzy kolejnymi próbami połączenia | `12` sekund |
 | `CAMERA_REQUEST_TIMEOUT` | Limit czasu zapytań API aparatu | `5` sekund |
 | `CAMERA_DOWNLOAD_TIMEOUT` | Limit czasu pojedynczego transferu zdjęcia | `180` sekund |
+| `DOWNLOAD_CONCURRENCY` | Liczba równoległych transferów RAW/JPEG; pomiary wskazują na 2 jako najlepszy punkt startowy | `2` (zakres `1`–`4`) |
+
+Na testowanym Pentaksie K-70 dwa równoległe pobrania RAW trwały około 59–77 sekund na plik. Przy czterech jednoczesnych pobraniach jeden plik trwał 282 sekundy, a trzy transfery zakończyły się timeoutem. Dlatego konfiguracja domyślna to `2`; można zmienić ją lokalnie, jeśli inne body lub warunki Wi-Fi dadzą lepszy wynik.
 
 Data `PHOTO_DATE_FROM` jest włącznie. Usługa pobiera datę wykonania ze szczegółów zdjęcia, jeśli lista aparatu jej nie zawiera. Po zmianie filtra wcześniej pominięte zdjęcia są sprawdzane ponownie.
 

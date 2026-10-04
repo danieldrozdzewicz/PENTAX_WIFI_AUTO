@@ -62,6 +62,13 @@ def download_atomic(camera, photo: RemotePhoto, root: Path) -> tuple[Path, int, 
         if suffix in {".dng", ".pef"} and header[:4] not in {b"II*\x00", b"MM\x00*"}:
             raise IOError("camera response is not a TIFF-based DNG/PEF file")
         digest = _hash_file(partial)
+        original = root / basename
+        if destination != original and original.is_file() and _hash_file(original) == digest:
+            # A previous run may have completed the file before its state row
+            # was committed. Reuse the byte-identical canonical file instead
+            # of leaving a needless ``_2`` copy behind.
+            partial.unlink()
+            return original, actual, digest
         os.replace(partial, destination)
         try:
             dirfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))

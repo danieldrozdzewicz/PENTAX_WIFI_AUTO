@@ -38,6 +38,7 @@ class Config:
     jellyfin_refresh_interval: float
     camera_request_timeout: float
     camera_download_timeout: float
+    download_concurrency: int
     poll_interval: float
     full_scan_interval: float
     connect_retry_interval: float
@@ -82,6 +83,7 @@ class Config:
             jellyfin_refresh_interval=max(60.0, float(val("JELLYFIN_REFRESH_INTERVAL", "300"))),
             camera_request_timeout=max(1.0, float(val("CAMERA_REQUEST_TIMEOUT", "5"))),
             camera_download_timeout=max(1.0, float(val("CAMERA_DOWNLOAD_TIMEOUT", "180"))),
+            download_concurrency=int(val("DOWNLOAD_CONCURRENCY", "2")),
             poll_interval=max(1.0, float(val("POLL_INTERVAL", "2"))),
             full_scan_interval=max(10.0, float(val("FULL_SCAN_INTERVAL", "60"))),
             connect_retry_interval=max(3.0, float(val("CONNECT_RETRY_INTERVAL", "12"))),
@@ -111,6 +113,8 @@ class Config:
             raise ValueError("PHOTO_ROOT must be an absolute path")
         if self.initial_sync not in {"baseline", "all"}:
             raise ValueError("INITIAL_SYNC must be baseline or all")
+        if not 1 <= self.download_concurrency <= 4:
+            raise ValueError("DOWNLOAD_CONCURRENCY must be between 1 and 4")
         if self.jpeg_subdir and (
             self.jpeg_subdir in {".", ".."}
             or "/" in self.jpeg_subdir

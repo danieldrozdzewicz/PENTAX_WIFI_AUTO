@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
 from pathlib import Path
@@ -64,6 +65,35 @@ class StateStore:
         if row["status"] in {"BASELINED", "FILTERED"}:
             return True
         return bool(row["local_path"] and Path(row["local_path"]).is_file())
+
+    def reuse_failed_download(self, photo):
+        """Recover a completed file when a later processing step failed."""
+        row = self.db.execute(
+            "SELECT size,camera_timestamp,local_path,sha256,status FROM photos WHERE camera_path=? AND filename=?",
+            (photo.camera_path, photo.filename),
+        ).fetchone()
+        if (not row or row["status"] not in {"FAILED", "DISCOVERED", "DOWNLOADING"}
+                or not row["local_path"] or not row["sha256"]):
+            return None
+        if photo.size is not None and row["size"] is not None and int(photo.size) != int(row["size"]):
+            return None
+        if photo.timestamp and row["camera_timestamp"] and photo.timestamp != row["camera_timestamp"]:
+            return None
+        path = Path(row["local_path"])
+        try:
+            if not path.is_file() or path.stat().st_size != int(row["size"]):
+                return None
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+        except OSError:
+            return None
+        if digest.hexdigest() != row["sha256"]:
+            return None
+        self.mark(photo, "DOWNLOADED", local_path=str(path), size=path.stat().st_size,
+                  sha256=row["sha256"])
+        return path, path.stat().st_size, row["sha256"]
 
     def mark(self, photo, status: str, *, local_path: str | None = None,
              size: int | None = None, sha256: str | None = None, error: str | None = None) -> None:

@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -101,12 +102,81 @@ class SyncDaemon:
             for photo in photos
             if Path(photo.filename).suffix.lower() in {".jpg", ".jpeg"}
         }
+        jpeg_root = self.config.photo_root / self.config.jpeg_subdir if self.config.jpeg_subdir else self.config.photo_root
         downloaded = 0
+        camera_error = None
+
+        def finish_photo(job, destination, size, digest):
+            nonlocal downloaded
+            photo, _, _, _, started, is_jpeg, reused = job
+            jellyfin_item_ready = False
+            try:
+                if not reused:
+                    self.state.mark(photo, "DOWNLOADED", local_path=str(destination), size=size, sha256=digest)
+                    LOG.info("downloaded %s (%d bytes, %.1f s)", photo.filename, size, time.monotonic() - started)
+                jellyfin_item_ready = is_jpeg
+                if (destination.suffix.lower() in {".dng", ".pef"}
+                        and Path(photo.filename).stem.casefold() not in jpeg_stems):
+                    try:
+                        preview = extract_jpeg_preview(
+                            destination, max_side=self.config.raw_preview_max_side,
+                            quality=self.config.raw_preview_quality, destination_dir=jpeg_root,
+                        )
+                        if preview:
+                            LOG.info("created Jellyfin JPEG preview %s", preview.name)
+                            jellyfin_item_ready = True
+                    except Exception as exc:
+                        LOG.warning("DNG %s is safely downloaded, but its JPEG preview failed: %s", destination.name, exc)
+                self.last_new_photo = time.monotonic()
+                self.status["last_file"] = photo.filename
+                downloaded += 1
+            except Exception as exc:
+                self.state.mark(photo, "FAILED", error=str(exc)[:500])
+                LOG.warning("will retry %s: %s", photo.filename, exc)
+            finally:
+                if jellyfin_item_ready:
+                    self.jellyfin.refresh()
+                    self.last_refresh = time.monotonic()
+                    self.last_new_photo = None
+                else:
+                    self._refresh_if_due()
+                self._write_status()
+
+        def run_batch(batch):
+            nonlocal camera_error
+            transfers = [job for job in batch if not job[6]]
+            for job in batch:
+                if job[6]:
+                    finish_photo(job, job[1], job[2], job[3])
+            if not transfers:
+                return
+            with ThreadPoolExecutor(max_workers=min(self.config.download_concurrency, len(transfers)),
+                                    thread_name_prefix="pentax-download") as pool:
+                futures = {pool.submit(download_atomic, self.camera, job[0], job[1]): job for job in transfers}
+                for future in as_completed(futures):
+                    job = futures[future]
+                    photo = job[0]
+                    try:
+                        destination, size, digest = future.result()
+                    except CameraError as exc:
+                        self.state.mark(photo, "FAILED", error=str(exc)[:500])
+                        LOG.warning("camera interrupted while downloading %s: %s", photo.filename, exc)
+                        camera_error = camera_error or exc
+                        self._refresh_if_due()
+                        self._write_status()
+                    except Exception as exc:
+                        self.state.mark(photo, "FAILED", error=str(exc)[:500])
+                        LOG.warning("will retry %s: %s", photo.filename, exc)
+                        self._refresh_if_due()
+                        self._write_status()
+                    else:
+                        finish_photo(job, destination, size, digest)
+
+        jobs = []
         for photo in photos:
             if self.state.is_processed(photo):
                 continue
             self.state.mark(photo, "DISCOVERED")
-            started = time.monotonic()
             try:
                 if self.config.photo_date_from is not None:
                     if not photo.timestamp:
@@ -118,41 +188,35 @@ class SyncDaemon:
                         self.state.mark(photo, "FILTERED")
                         LOG.info("skipped %s captured before PHOTO_DATE_FROM (%s)", photo.filename, photo.timestamp)
                         continue
-                self.state.mark(photo, "DOWNLOADING")
                 is_jpeg = Path(photo.filename).suffix.lower() in {".jpg", ".jpeg"}
-                jpeg_root = (
-                    self.config.photo_root / self.config.jpeg_subdir
-                    if self.config.jpeg_subdir else self.config.photo_root
-                )
                 download_root = jpeg_root if is_jpeg else self.config.photo_root
-                destination, size, digest = download_atomic(self.camera, photo, download_root)
-                self.state.mark(photo, "DOWNLOADED", local_path=str(destination), size=size, sha256=digest)
-                LOG.info("downloaded %s (%d bytes, %.1f s)", photo.filename, size, time.monotonic() - started)
-                if (destination.suffix.lower() in {".dng", ".pef"}
-                        and Path(photo.filename).stem.casefold() not in jpeg_stems):
-                    preview = extract_jpeg_preview(
-                        destination,
-                        max_side=self.config.raw_preview_max_side,
-                        quality=self.config.raw_preview_quality,
-                        destination_dir=jpeg_root,
-                    )
-                    if preview:
-                        LOG.info("created Jellyfin JPEG preview %s", preview.name)
-                self.last_new_photo = time.monotonic()
-                self.status["last_file"] = photo.filename
-                downloaded += 1
+                reused = self.state.reuse_failed_download(photo)
+                if reused:
+                    destination, size, digest = reused
+                    LOG.info("reused verified local file for %s; skipping duplicate transfer", photo.filename)
+                    jobs.append((photo, destination, size, digest, time.monotonic(), is_jpeg, True))
+                else:
+                    self.state.mark(photo, "DOWNLOADING")
+                    jobs.append((photo, download_root, None, None, time.monotonic(), is_jpeg, False))
+                if len(jobs) >= self.config.download_concurrency:
+                    run_batch(jobs)
+                    jobs = []
+                    if camera_error:
+                        break
             except CameraError as exc:
                 self.state.mark(photo, "FAILED", error=str(exc)[:500])
                 LOG.warning("camera interrupted while checking %s; scan will resume: %s", photo.filename, exc)
+                if jobs:
+                    run_batch(jobs)
+                    jobs = []
                 raise
             except Exception as exc:
                 self.state.mark(photo, "FAILED", error=str(exc)[:500])
                 LOG.warning("will retry %s: %s", photo.filename, exc)
-            finally:
-                # A large camera inventory can take many minutes; keep Jellyfin
-                # and the visible status current while each RAW is transferred.
-                self._refresh_if_due()
-                self._write_status()
+        if jobs:
+            run_batch(jobs)
+        if camera_error:
+            raise camera_error
         if downloaded:
             self.status["last_sync"] = _iso_now()
             self.state.set_meta("last_sync", self.status["last_sync"])

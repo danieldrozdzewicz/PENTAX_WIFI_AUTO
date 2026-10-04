@@ -40,6 +40,20 @@ class StorageTests(unittest.TestCase):
             self.assertEqual((root / "IMG001.JPG").read_bytes(), b"old")
             self.assertEqual(path.name, "IMG001_2.JPG")
 
+    def test_identical_existing_file_is_reused_without_duplicate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            photo = RemotePhoto("DCIM/100PENTX", "IMG001.DNG")
+            original = root / photo.filename
+            original.write_bytes(b"II*\x00camera-image-bytes")
+
+            path, size, digest = download_atomic(FakeCamera(), photo, root)
+
+            self.assertEqual(path, original)
+            self.assertEqual(size, original.stat().st_size)
+            self.assertEqual(len(digest), 64)
+            self.assertFalse((root / "IMG001_2.DNG").exists())
+
     def test_error_document_is_never_finalized(self):
         with tempfile.TemporaryDirectory() as tmp:
             photo = RemotePhoto("100_1503", "IMG001.DNG")
